@@ -30,6 +30,13 @@ _initialized = False
 def init_model():
     """Initialize model on startup"""
     try:
+        # Skip AI model loading in low memory environments
+        memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
+        if memory_mb > 200 or os.environ.get('RAILWAY_ENVIRONMENT'):
+            logger.info("⚠️ Skipping AI model loading due to memory constraints")
+            logger.info("🔧 Using template-based generation mode")
+            return True
+            
         logger.info("🚀 Initializing AI model...")
         generator = get_generator()
         model_info = generator.get_model_info()
@@ -37,6 +44,7 @@ def init_model():
         return True
     except Exception as e:
         logger.error(f"❌ Model initialization failed: {e}")
+        logger.info("🔧 Falling back to template-based generation")
         return False
 
 def health_check():
@@ -122,8 +130,17 @@ def before_request():
 def home():
     """Health check endpoint with system status"""
     health = health_check()
-    generator = get_generator()
-    model_info = generator.get_model_info()
+    
+    try:
+        generator = get_generator()
+        model_info = generator.get_model_info()
+    except Exception:
+        # Fallback when model is not available
+        model_info = {
+            "model_name": "Template-Based Generator",
+            "status": "template_mode",
+            "optimization": "memory_safe"
+        }
     
     return jsonify({
         "message": "AI Test Case Generator Backend is running",
@@ -141,13 +158,18 @@ def home():
 def health():
     """Dedicated health check for Railway monitoring"""
     health_status = health_check()
-    generator = get_generator()
-    model_info = generator.get_model_info()
+    
+    try:
+        generator = get_generator()
+        model_info = generator.get_model_info()
+        model_loaded = model_info["status"] == "loaded"
+    except Exception:
+        model_loaded = False
     
     return jsonify({
         "status": health_status["status"],
         "memory": health_status["memory_usage"],
-        "model_loaded": model_info["status"] == "loaded",
+        "model_loaded": model_loaded,
         "uptime": "ok"
     })
 
@@ -186,16 +208,22 @@ def generate():
             return jsonify({"error": "Failed to generate test cases"}), 500
         
         # Get model info for response
-        generator = get_generator()
-        model_info = generator.get_model_info()
+        try:
+            generator = get_generator()
+            model_info = generator.get_model_info()
+            model_used = model_info["model_name"]
+            generation_method = model_info["status"]
+        except Exception:
+            model_used = "Template-Based Generator"
+            generation_method = "template_mode"
         
         logger.info(f"✅ Successfully generated {len(test_cases)} test cases")
         
         return jsonify({
             "test_cases": test_cases,
             "count": len(test_cases),
-            "model_used": model_info["model_name"],
-            "generation_method": model_info["status"]
+            "model_used": model_used,
+            "generation_method": generation_method
         })
         
     except Exception as e:
