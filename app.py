@@ -47,7 +47,7 @@ def init_model():
         logger.info("🔧 Falling back to template-based generation")
         return False
 
-def health_check():
+def check_health():
     """Check system health"""
     try:
         memory_mb = psutil.Process().memory_info().rss / 1024 / 1024
@@ -56,7 +56,7 @@ def health_check():
             "memory_usage": f"{memory_mb:.1f}MB",
             "memory_limit": "512MB"
         }
-    except:
+    except Exception:
         return {"status": "unknown", "memory_usage": "unavailable"}
 
 # Enhanced memory monitoring with automatic cleanup
@@ -71,37 +71,29 @@ def smart_memory_monitor(func):
             initial_memory = psutil.Process().memory_info().rss / 1024 / 1024
             logger.info(f"🔍 {func.__name__} started | Memory: {initial_memory:.1f}MB")
             
-            # Force cleanup if memory is already high
             if initial_memory > 400:
                 logger.warning("⚠️ High memory detected, forcing cleanup...")
                 gc.collect()
             
-            # Execute function
             result = func(*args, **kwargs)
-            
             return result
-            
+
         except Exception as e:
             logger.error(f"❌ Error in {func.__name__}: {str(e)}")
-            # Return error response instead of crashing
             return jsonify({
                 "error": "Internal server error occurred",
                 "message": "Please try again or contact support"
             }), 500
-            
+
         finally:
-            # Post-execution cleanup and logging
             final_memory = psutil.Process().memory_info().rss / 1024 / 1024
             execution_time = time.time() - start_time
             
             logger.info(f"✅ {func.__name__} completed | Memory: {final_memory:.1f}MB | Time: {execution_time:.2f}s")
             
-            # Aggressive cleanup if needed
             if final_memory > 450:
                 logger.warning("🧹 High memory usage, forcing aggressive cleanup...")
                 gc.collect()
-                
-                # Double-check memory after cleanup
                 post_cleanup_memory = psutil.Process().memory_info().rss / 1024 / 1024
                 logger.info(f"🧹 Post-cleanup memory: {post_cleanup_memory:.1f}MB")
     
@@ -129,13 +121,12 @@ def before_request():
 @app.route('/')
 def home():
     """Health check endpoint with system status"""
-    health = health_check()
+    health_data = check_health()
     
     try:
         generator = get_generator()
         model_info = generator.get_model_info()
     except Exception:
-        # Fallback when model is not available
         model_info = {
             "model_name": "Template-Based Generator",
             "status": "template_mode",
@@ -144,8 +135,8 @@ def home():
     
     return jsonify({
         "message": "AI Test Case Generator Backend is running",
-        "status": health["status"],
-        "memory_usage": health["memory_usage"],
+        "status": health_data["status"],
+        "memory_usage": health_data["memory_usage"],
         "model": {
             "name": model_info["model_name"],
             "status": model_info["status"],
@@ -157,7 +148,7 @@ def home():
 @app.route('/health')
 def health():
     """Dedicated health check for Railway monitoring"""
-    health_status = health_check()
+    health_status = check_health()
     
     try:
         generator = get_generator()
@@ -177,8 +168,6 @@ def health():
 @smart_memory_monitor
 def generate():
     """Generate test cases with enhanced error handling"""
-    
-    # Validate request
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
     
@@ -188,26 +177,21 @@ def generate():
     
     srs_text = data.get('srs', '').strip()
     
-    # Validate SRS content
     if not srs_text:
         return jsonify({"error": "No SRS content provided"}), 400
     
-    if len(srs_text) > 5000:  # Limit input size for memory safety
+    if len(srs_text) > 5000:
         logger.warning(f"SRS text truncated from {len(srs_text)} to 5000 characters")
         srs_text = srs_text[:5000]
     
     try:
         logger.info(f"🎯 Generating test cases for SRS ({len(srs_text)} chars)")
-        
-        # Generate test cases
         test_cases = generate_test_cases(srs_text)
         
-        # Validate output
         if not test_cases or len(test_cases) == 0:
             logger.error("No test cases generated")
             return jsonify({"error": "Failed to generate test cases"}), 500
         
-        # Get model info for response
         try:
             generator = get_generator()
             model_info = generator.get_model_info()
@@ -239,17 +223,16 @@ def model_info():
     try:
         generator = get_generator()
         info = generator.get_model_info()
-        health = health_check()
+        health_data = check_health()
         
         return jsonify({
             "model": info,
-            "system": health
+            "system": health_data
         })
     except Exception as e:
         logger.error(f"Error getting model info: {e}")
         return jsonify({"error": "Unable to get model information"}), 500
 
-# Error handlers
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({"error": "Endpoint not found"}), 404
@@ -264,24 +247,20 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 if __name__ == '__main__':
-    # Railway deployment configuration
     port = int(os.environ.get("PORT", 5000))
-    
-    # Production settings for Railway
     debug_mode = os.environ.get("FLASK_ENV") == "development"
     
     logger.info(f"🚀 Starting Flask app on port {port}")
     logger.info(f"🔧 Debug mode: {debug_mode}")
     logger.info(f"🖥️ Environment: {'Railway' if os.environ.get('RAILWAY_ENVIRONMENT') else 'Local'}")
     
-    # Initialize model before starting server (if not Railway)
     if not os.environ.get('RAILWAY_ENVIRONMENT'):
         ensure_initialized()
     
     app.run(
-        host='0.0.0.0', 
-        port=port, 
+        host='0.0.0.0',
+        port=port,
         debug=debug_mode,
-        threaded=True,  # Enable threading for Railway
-        use_reloader=False  # Disable reloader in production
+        threaded=True,
+        use_reloader=False
     )
