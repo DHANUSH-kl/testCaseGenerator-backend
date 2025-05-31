@@ -193,12 +193,15 @@ def generate_with_fallback(srs_text):
         tokenizer, model = load_model_with_memory_optimization(model_name)
         if tokenizer and model:
             try:
-                return generate_with_ai_model(srs_text, tokenizer, model), model_name
+                test_cases = generate_with_ai_model(srs_text, tokenizer, model)
+                reason = get_algorithm_reason(model_name)
+                return test_cases, model_name, "transformer (causal LM)", reason
             except Exception as e:
                 logger.warning(f"AI generation failed: {e}, falling back to templates")
 
     logger.info("⚠️ Using fallback template-based generation")
-    return generate_template_based_test_cases(srs_text), "Template-Based Generator"
+    test_cases = generate_template_based_test_cases(srs_text)
+    return test_cases, "Template-Based Generator", "rule-based", "Low memory - fallback to rule-based generation"
 
 # ✅ Function exposed to app.py
 def generate_test_cases(srs_text):
@@ -234,3 +237,26 @@ def monitor_memory():
     if mem > 450:
         gc.collect()
         logger.info("Memory cleanup triggered")
+
+# ✅ NEW FUNCTION for enhanced output: test cases + model info + reason
+def generate_test_cases_and_info(input_text):
+    test_cases, model_name, algorithm_used, reason = generate_with_fallback(input_text)
+    return {
+        "model": model_name,
+        "algorithm": algorithm_used,
+        "reason": reason,
+        "test_cases": test_cases
+    }
+
+# ✅ Explain why each algorithm is selected
+def get_algorithm_reason(model_name):
+    if model_name == "microsoft/DialoGPT-small":
+        return "Selected due to low memory availability; DialoGPT-small provides conversational understanding in limited memory environments."
+    elif model_name == "distilgpt2":
+        return "Selected for its balance between performance and low memory usage. Ideal for small environments needing causal language modeling."
+    elif model_name == "gpt2":
+        return "Chosen for general-purpose text generation with moderate memory headroom."
+    elif model_name is None:
+        return "No model used due to insufficient memory. Rule-based template generation chosen instead."
+    else:
+        return "Model selected based on best tradeoff between memory usage and language generation capability."
