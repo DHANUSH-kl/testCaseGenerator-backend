@@ -7,6 +7,7 @@ import gc
 import psutil
 from functools import wraps
 import time
+import threading
 
 # Configure logging for Railway
 logging.basicConfig(
@@ -21,6 +22,10 @@ CORS(app)
 # Configuration for Railway
 app.config['JSON_SORT_KEYS'] = False
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False  # Reduce response size
+
+# Thread-safe initialization
+_init_lock = threading.Lock()
+_initialized = False
 
 def init_model():
     """Initialize model on startup"""
@@ -93,6 +98,25 @@ def smart_memory_monitor(func):
                 logger.info(f"🧹 Post-cleanup memory: {post_cleanup_memory:.1f}MB")
     
     return wrapper
+
+def ensure_initialized():
+    """Ensure model is initialized (thread-safe)"""
+    global _initialized
+    if not _initialized:
+        with _init_lock:
+            if not _initialized:
+                logger.info("🚀 Flask app starting up on Railway...")
+                success = init_model()
+                if success:
+                    logger.info("✅ Startup completed successfully")
+                else:
+                    logger.warning("⚠️ Model initialization failed, using template mode")
+                _initialized = True
+
+@app.before_request
+def before_request():
+    """Initialize model on first request (Flask 2.2+ compatible)"""
+    ensure_initialized()
 
 @app.route('/')
 def home():
@@ -211,30 +235,6 @@ def internal_error(error):
     logger.error(f"Internal server error: {error}")
     return jsonify({"error": "Internal server error"}), 500
 
-# Railway-specific optimizations
-@app.before_first_request
-def startup():
-    """Initialize model on first request (Railway-friendly)"""
-    logger.info("🚀 Flask app starting up on Railway...")
-    success = init_model()
-    if success:
-        logger.info("✅ Startup completed successfully")
-    else:
-        logger.warning("⚠️ Model initialization failed, using template mode")
-
-# Alternative startup for newer Flask versions
-@app.before_request
-def before_first_request():
-    """Alternative startup method for Flask 2.2+"""
-    if not hasattr(app, '_startup_complete'):
-        logger.info("🚀 Flask app starting up on Railway...")
-        success = init_model()
-        if success:
-            logger.info("✅ Startup completed successfully")
-        else:
-            logger.warning("⚠️ Model initialization failed, using template mode")
-        app._startup_complete = True
-
 if __name__ == '__main__':
     # Railway deployment configuration
     port = int(os.environ.get("PORT", 5000))
@@ -248,7 +248,7 @@ if __name__ == '__main__':
     
     # Initialize model before starting server (if not Railway)
     if not os.environ.get('RAILWAY_ENVIRONMENT'):
-        init_model()
+        ensure_initialized()
     
     app.run(
         host='0.0.0.0', 
